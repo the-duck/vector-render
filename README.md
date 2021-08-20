@@ -1,3 +1,21 @@
+## Attention please !
+This is a fork of the Vector Render addon built by Marco Rossini.
+The intent of this fork is to adapt it for production. Here are some possible improvements :
+- [workflow] Render operator into compositor node
+- [workflow] RenderEngine
+- [workflow] Rasterize image in realtime or just as compositing pass
+- [visual] Apply a simple material language (per object or material) that can be interpreted to SVG
+  --> my usage : for cartographic symbology
+- [precision] Read lines and curves directly onto SVG (no need to transform to mesh)
+- [visual] Apply holdout when objects are in this mode.
+- [visual] Apply object outline (useful for holdout as well, if it is simpler than multiple faces)
+- [calculation] Apply ray cast shadows from sun beam (self cast on object, cast by object)
+
+Production usages:
+- Technical CAD renders
+- 3D cartography with certain precision (cadastre, ...)
+- 
+
 # Vector Render
 Vector Render is a Blender add-on for creating vector graphics from the objects seen through the camera view.
 This is useful for example in publications to illustrate three dimensional objects.

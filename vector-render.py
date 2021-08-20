@@ -21,6 +21,11 @@
 # from the Proceedings of the British Machine Vision Conference, published by
 # the BMVA Press.
 
+# 2021, Mark Spurgeon
+# todo for base production : 
+# - same edge intersection for polygons
+# - filter faces that are in camera
+
 import bpy
 import mathutils
 from math import cos, degrees, radians, sqrt, acos, pi
@@ -482,7 +487,7 @@ class projector:
 # EDGE --------------------------------------------------------------------------------------------------------------------------------------------------------
 
 class edge:
-    def __init__(self, vertex1, vertex2, no_angle_limit = False):
+    def __init__(self, vertex1, vertex2, holdout = False, no_angle_limit = False):
         self.endpoints = None
         for i in range(3):
             if vertex1[i] < vertex2[i]:
@@ -503,6 +508,7 @@ class edge:
         self.local_edge_angle_limit_cos = None
         self.no_angle_limit = no_angle_limit
         self.bbox = None
+        self.holdout = holdout
 
     def __eq__(self, edge):
         res = False
@@ -664,7 +670,7 @@ class edge:
 # POLYGON -----------------------------------------------------------------------------------------------------------------------------------------------------
 
 class polygon:
-    def __init__(self, vertices, normal, visible_edges = None):
+    def __init__(self, vertices, normal, visible_edges = None, holdout = False):
         self.N = len(vertices)
         self.qq = vertices
         self.nn = normal
@@ -688,6 +694,8 @@ class polygon:
         self.colour = [[0.8, 0.8, 0.8], [0.8, 0.8, 0.8]]
         self.front_facing = True
         self.bbox = None
+        self.holdout = holdout
+        self.deduced = None
 
     def __str__(self):
         s = ""
@@ -906,6 +914,10 @@ class polygon:
         res[1][0].colour[1] = list(self.colour[1])
 
         return res
+    
+    def deduce(self, polylist):
+
+        return
 
     def set_shader(self, shader):
         if not shader:
@@ -990,18 +1002,19 @@ class polygon:
                 self.colour[i][c] = gamma_correction(self.colour[i][c])
 
     def draw(self, m):
-        segs = []
-        for i in range(self.N):
-            segs.append([self.qp[i][1], self.qp[i][2]])
-        segs_closed = []
-        for i in range(self.N + 1):
-            segs_closed.append([self.qp[i % self.N][1], self.qp[i % self.N][2]])
-        if self.front_facing:
-            m.polydraw(segs_closed, self.colour[0])
-            m.polyfill(segs, self.colour[0])
-        else:
-            m.polydraw(segs_closed, self.colour[1])
-            m.polyfill(segs, self.colour[1])
+        if not self.holdout:
+            segs = []
+            for i in range(self.N):
+                segs.append([self.qp[i][1], self.qp[i][2]])
+            segs_closed = []
+            for i in range(self.N + 1):
+                segs_closed.append([self.qp[i % self.N][1], self.qp[i % self.N][2]])
+            if self.front_facing:
+                m.polydraw(segs_closed, self.colour[0])
+                m.polyfill(segs, self.colour[0])
+            else:
+                m.polydraw(segs_closed, self.colour[1])
+                m.polyfill(segs, self.colour[1])
 
 # LABEL -------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -1079,6 +1092,9 @@ class VectorRender(bpy.types.Operator):
         edgelist = []
         edgetree = None
         labellist = []
+        
+        holdout_polylist_indices = []
+        holdout_edgelist_indices = []
 
         # Get the mesh data from all visible objects in the scene
         print("Reading geometry ...")
@@ -1094,6 +1110,7 @@ class VectorRender(bpy.types.Operator):
             object_pos = object.location
             object_rot = object.rotation_euler
             object_scl = object.scale
+            object_holdout = object.holdout_get()
             # Apply the modifiers, if necessary
             #if scene.vector_render_apply_modifiers:
             #    mesh = object.to_mesh(scene, True, "RENDER")
@@ -1113,8 +1130,9 @@ class VectorRender(bpy.types.Operator):
                 # Polygon normal
                 normal = mathutils.Vector(object_normal_transform(poly.normal, object_rot))
                 # Create polygon object
-                poly_obj = polygon(vertices, normal)
+                poly_obj = polygon(vertices, normal, holdout = object_holdout)
                 polylist.append(poly_obj)
+    
                 if fill_polygons:
                     # If the polygon has a material, assign the diffuse colour to it. Otherwise the default color is used.
                     if face_colour:
@@ -1137,7 +1155,9 @@ class VectorRender(bpy.types.Operator):
                 for eg in poly.edge_keys:
                     # Create an edge object
                     e = edge(object_transform(mesh.vertices[eg[0]].co, object_pos, object_rot, object_scl),
-                             object_transform(mesh.vertices[eg[1]].co, object_pos, object_rot, object_scl))
+                             object_transform(mesh.vertices[eg[1]].co, object_pos, object_rot, object_scl),
+                             holdout = object_holdout
+                             )
                     # Add the edge to the global edge list
                     added = True
                     if edgetree:
@@ -1153,7 +1173,8 @@ class VectorRender(bpy.types.Operator):
             for eg in mesh.edges:
                 e = edge(object_transform(mesh.vertices[eg.key[0]].co, object_pos, object_rot, object_scl),
                          object_transform(mesh.vertices[eg.key[1]].co, object_pos, object_rot, object_scl),
-                         eg.crease > 0)
+                         holdout = object_holdout,
+                         no_angle_limit = eg.crease > 0)
                 # Add the edge to the global edge list
                 if edgetree:
                     # Duplicate edges will not be added
@@ -1230,7 +1251,8 @@ class VectorRender(bpy.types.Operator):
             for i in indices_for_removal:
                 edgelist.pop(i)
                 edgelist_len -= 1
-
+        
+        
         filename = scene.vector_render_file
         if scene.vector_render_output_format == "MPOST":
             m = mpost_engine(filename)
@@ -1250,6 +1272,8 @@ class VectorRender(bpy.types.Operator):
             for e in edgelist:
                 e.check_visibility(polylist, p, m)
 
+        # face holdout reduction
+
         print("Drawing ...")
 
         # Set canvas size
@@ -1259,7 +1283,7 @@ class VectorRender(bpy.types.Operator):
 
         # Fill polygons
         if fill_polygons:
-            m.set_small_linewidth();
+            m.set_small_linewidth()
             polytree.draw(p, m)
 
         # Draw hidden lines
@@ -1272,7 +1296,8 @@ class VectorRender(bpy.types.Operator):
         if draw_wireframe:
             m.set_linewidth(scene.vector_render_edge_width);
             for e in edgelist:
-                e.draw(m, hidden = False)
+                if not e.holdout:
+                    e.draw(m, hidden = False)
 
         # Draw labels
         if draw_labels:
