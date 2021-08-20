@@ -26,6 +26,8 @@ import mathutils
 from math import cos, degrees, radians, sqrt, acos, pi
 from random import choice
 
+from bpy_extras.object_utils import world_to_camera_view
+
 bl_info = {
     "name": "Vector Render",
     "author": "Marco Rossini",
@@ -445,7 +447,9 @@ class projector:
             self.scale = 1.0 / camera.data.ortho_scale
 
     def transform_to_camera_coords(self, vec):
-        return self.roti * vec - self.roti * self.cp
+        # TODO: check with world_to_camera_view
+        #twod = world_to_camera_view(scene, camera, v_globalcoords)
+        return self.roti @ vec - self.roti @ self.cp
 
     def project(self, v):
         # Convert the vector from global coordinates to camera coordinates
@@ -1084,19 +1088,20 @@ class VectorRender(bpy.types.Operator):
             if not object.type == "MESH" and not object.type == "CURVE":
                 continue
             # Filter hidden objects
-            if object.hide_render or not object.is_visible(scene):
+            if object.hide_render or not object.visible_get():
                 continue
             print("- Reading", object.name, "...")
             object_pos = object.location
             object_rot = object.rotation_euler
             object_scl = object.scale
             # Apply the modifiers, if necessary
-            if scene.vector_render_apply_modifiers:
-                mesh = object.to_mesh(scene, True, "RENDER")
-            elif object.type == "CURVE":
-                mesh = object.to_mesh(scene, False, "RENDER")
-            else:
-                mesh = object.data
+            #if scene.vector_render_apply_modifiers:
+            #    mesh = object.to_mesh(scene, True, "RENDER")
+            #elif object.type == "CURVE":
+            #    mesh = object.to_mesh(scene, False, "RENDER")
+            #else:
+            #    mesh = object.data
+            mesh = object.data
             # Iterate over polygons
             for poly in mesh.polygons:
                 # Get the vertex indices
@@ -1322,9 +1327,9 @@ class VectorRenderPanel(bpy.types.Panel):
         layout = self.layout
 
         filebox = layout.box()
-        filebox.label("File:")
+        filebox.label(text="File:")
         filebox.prop(context.scene, "vector_render_file")
-        filebox.label("Format:")
+        filebox.label(text="Format:")
         buttonrow = filebox.row(align = True)
         buttonrow.prop_enum(context.scene, "vector_render_output_format", "SVG")
         buttonrow.prop_enum(context.scene, "vector_render_output_format", "MPOST")
@@ -1341,13 +1346,13 @@ class VectorRenderPanel(bpy.types.Panel):
         if scene.vector_render_draw_edges:
             edgebox.prop(context.scene, "vector_render_edge_width")
             edgebox.prop(context.scene, "vector_render_edge_colour")
-            edgebox.label("Plane edges:")
+            edgebox.label(text="Plane edges:")
             buttonrow = edgebox.row(align = True)
             buttonrow.prop_enum(context.scene, "vector_render_plane_edges", "HIDE")
             buttonrow.prop_enum(context.scene, "vector_render_plane_edges", "SHOW")
             if scene.vector_render_plane_edges == "HIDE":
                 edgebox.prop(context.scene, "vector_render_plane_edges_angle")
-            edgebox.label("Obscured edges:")
+            edgebox.label(text="Obscured edges:")
             buttonrow = edgebox.row(align = True)
             buttonrow.prop_enum(context.scene, "vector_render_hidden_lines", "HIDE")
             buttonrow.prop_enum(context.scene, "vector_render_hidden_lines", "DASH")
