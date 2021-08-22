@@ -31,6 +31,8 @@ import mathutils
 from math import cos, degrees, radians, sqrt, acos, pi
 from random import choice
 
+from mathutils import Vector, Euler
+
 from bpy_extras.object_utils import world_to_camera_view
 
 bl_info = {
@@ -375,6 +377,19 @@ class bsp_node:
         else:
             print("This should never happen.")
 
+    def cut_difference_with_front(self):
+        # cut main polygon
+        p = self.node_polys[0]
+        if self.front_polys:
+            fp_list = self.front_polys.node_polys
+            for fp in fp_list:
+                p.apply_difference(fp)
+        # repeat for rest of tree
+        if self.back_polys:
+            self.back_polys.cut_difference_with_front()
+        if self.front_polys:
+            self.front_polys.cut_difference_with_front()   
+
     def draw(self, proj, mp):
         # Camera position
         cam = proj.cp
@@ -394,6 +409,37 @@ class bsp_node:
             self.draw_polys(proj, mp)
             if self.back_polys:
                 self.back_polys.draw(proj, mp)
+
+    def get_edges(self):
+        edge_list = []
+        if self.back_polys:
+            for e in self.back_polys.get_edges():
+                if e not in edge_list:
+                    edge_list.append(e)
+                    
+        for p in self.node_polys:
+            el = p.extract_edges()
+            for e in el: 
+                edge_list.append(e)
+        if self.front_polys:
+            for e in self.front_polys.get_edges():
+                if e not in edge_list:
+                    edge_list.append(e)
+        return edge_list
+
+    def get_polygons(self):
+        pl = []
+        if self.back_polys:
+            for p in self.back_polys.get_polygons():
+                if p not in pl:
+                    pl.append(p)
+        for p in self.node_polys:
+            pl.append(p)
+        if self.front_polys:
+            for p in self.front_polys.get_polygons():
+                if p not in pl:
+                    pl.append(p)
+        return pl
 
     def draw_polys(self, proj, mp):
         for p in self.node_polys:
@@ -534,6 +580,9 @@ class edge:
         self.endpoints_proj[1] = p.project(self.endpoints[1])
         self.direction_proj = self.endpoints_proj[1] - self.endpoints_proj[0]
         self.bbox = bounding_box(self.endpoints_proj)
+
+    def extend(self, factor):      
+        return self.endpoints_proj
 
     def add_polygon(self, poly):
         self.polymember.append(poly)
@@ -706,13 +755,25 @@ class polygon:
     def project(self, p):
         for i in range(self.N):
             self.qp[i] = p.project(self.qq[i])
-        self.centre_proj = p.project(self.centre)
+        self.centre_proj = p.project(self.centre) # WHY
         if self.nn.dot(p.cp - self.centre) < 0:
             self.front_facing = False
         self.bbox = bounding_box(self.qp)
 
     def point_dist(self, v):
         return self.nn.dot(v) + self.pd
+
+    def apply_difference(self, diffpoly):
+        # TODO: see if more readable way
+        if self.bbox.overlap(diffpoly.bbox):
+            print('theres a thing')
+            og_edges = self.extract_projected_edges()
+            print('e', og_edges)
+        
+        #if (self.bbox.xmax > diffpoly.bbox.xmin and self.bbox.ymax > diffpoly.bbox.ymin) or (diffpoly.bbox.xmax > self.bbox.xmin and diffpoly.bbox.ymax > self.bbox.ymin):
+        #    print('there is a thing')
+
+        return
 
     def inside(self, proj_x, proj_y, mp):
         # Determiness, whether the given point is within the polygon
@@ -906,7 +967,7 @@ class polygon:
                         segs_a.append(self.visible_edges[i % self.N])
                         segs_b.append(0)
 
-        res = [[polygon(vert_a, self.nn, segs_a)], [polygon(vert_b, self.nn, segs_b)]]
+        res = [[polygon(vert_a, self.nn, segs_a, holdout = self.holdout)], [polygon(vert_b, self.nn, segs_b, holdout = self.holdout)]]
         # Make a copy of the colours
         res[0][0].colour[0] = list(self.colour[0])
         res[0][0].colour[1] = list(self.colour[1])
@@ -915,9 +976,23 @@ class polygon:
 
         return res
     
-    def deduce(self, polylist):
+    def extract_edges(self):
+        edges_index = [(i,i+1) for i in range(0, len(self.qq)) if i + 1 < len(self.qp)]
+        edges_index.append((len(self.qq) - 1, 0))
+        edges = []
+        for ei, eii in edges_index:
+            edges.append((self.qq[ei],self.qq[eii]))
+        
+        return edges
 
-        return
+    def extract_projected_edges(self):
+        edges_index = [(i,i+1) for i in range(0, len(self.qp)) if i + 1 < len(self.qp)]
+        edges_index.append((len(self.qp) - 1, 0))
+        edges = []
+        for ei, eii in edges_index:
+            edges.append((self.qp[ei],self.qp[eii]))
+        
+        return edges
 
     def set_shader(self, shader):
         if not shader:
@@ -1010,10 +1085,10 @@ class polygon:
             for i in range(self.N + 1):
                 segs_closed.append([self.qp[i % self.N][1], self.qp[i % self.N][2]])
             if self.front_facing:
-                m.polydraw(segs_closed, self.colour[0])
+                #m.polydraw(segs_closed, self.colour[0])
                 m.polyfill(segs, self.colour[0])
             else:
-                m.polydraw(segs_closed, self.colour[1])
+                #m.polydraw(segs_closed, self.colour[1])
                 m.polyfill(segs, self.colour[1])
 
 # LABEL -------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1092,9 +1167,11 @@ class VectorRender(bpy.types.Operator):
         edgelist = []
         edgetree = None
         labellist = []
+
+        split_edgelist = []
+        split_polylist = []
         
-        holdout_polylist_indices = []
-        holdout_edgelist_indices = []
+        holdout_polylist = []
 
         # Get the mesh data from all visible objects in the scene
         print("Reading geometry ...")
@@ -1151,6 +1228,16 @@ class VectorRender(bpy.types.Operator):
                     else:
                         polytree = bsp_node(poly_obj)
 
+                split_p = polytree.get_polygons()
+                for sp in split_p:
+                    if sp not in split_polylist:
+                        split_polylist.append(sp)
+                split_e = polytree.get_edges()
+                for sp in split_e:
+                    e = edge(sp[0], sp[1])
+                    if e not in split_edgelist:
+                        split_edgelist.append(e)
+                
                 # Iterate over the edges of the polygon
                 for eg in poly.edge_keys:
                     # Create an edge object
@@ -1169,6 +1256,7 @@ class VectorRender(bpy.types.Operator):
                         e.add_polygon(poly_obj)
                     else:
                         edgetree.get_identical(e).add_polygon(poly_obj)
+            
             # Iterate over the edges of the mesh (to catch edges that are not part of any polygon)
             for eg in mesh.edges:
                 e = edge(object_transform(mesh.vertices[eg.key[0]].co, object_pos, object_rot, object_scl),
@@ -1183,7 +1271,6 @@ class VectorRender(bpy.types.Operator):
                         edgetree.get_identical(e).no_angle_limit = True
                 else:
                     edgetree = binary_tree(e)
-
         # Get the text data from all visible text objects in the scene
         print("Reading labels ...")
         for object in scene.objects:
@@ -1214,11 +1301,20 @@ class VectorRender(bpy.types.Operator):
         print("Projecting edges ...")
         for e in edgelist:
             e.project(p)
+        
+        print("Projecting split edges ...")
+        for se in split_edgelist:
+            se.project(p)
 
         print("Projecting polygons ...")
         for poly in polylist:
             poly.project(p)
+        
+        print("Projecting split edges ...")
+        for sp in split_polylist:
+            sp.project(p)
 
+        print('ho', holdout_polylist)
         print("Projecting labels ...")
         for lb in labellist:
             lb.project(p)
@@ -1252,6 +1348,7 @@ class VectorRender(bpy.types.Operator):
                 edgelist.pop(i)
                 edgelist_len -= 1
         
+        # Remove hidden faces
         
         filename = scene.vector_render_file
         if scene.vector_render_output_format == "MPOST":
@@ -1262,9 +1359,10 @@ class VectorRender(bpy.types.Operator):
         if hidden_line_removal:
             # Determine the edge intersection points
             print("Intersecting lines ...")
+
             skip = 1
             for e in edgelist:
-                e.intersect(edgelist, skip)
+                e.intersect(split_edgelist, skip)
                 skip += 1
 
         if hidden_line_removal:
@@ -1283,8 +1381,16 @@ class VectorRender(bpy.types.Operator):
 
         # Fill polygons
         if fill_polygons:
+            polytree.cut_difference_with_front()
             m.set_small_linewidth()
             polytree.draw(p, m)
+
+        #for se in split_edgelist:
+        #    m.set_small_linewidth()
+        #    #se.project(p)
+        #    #se.extend(1.2)
+        #    se.colour = [1, 0, 0]
+        #    se.draw(m, hidden = False)
 
         # Draw hidden lines
         if draw_wireframe and draw_hidden_lines:
@@ -1298,6 +1404,12 @@ class VectorRender(bpy.types.Operator):
             for e in edgelist:
                 if not e.holdout:
                     e.draw(m, hidden = False)
+
+
+        for sp in split_polylist:
+            if sp.holdout:
+                sp.colour = [[0, 1, 0], [0, 1, 0]]
+                sp.draw(m)
 
         # Draw labels
         if draw_labels:
