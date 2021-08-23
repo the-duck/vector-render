@@ -35,6 +35,8 @@ from mathutils import Vector, Euler
 
 from bpy_extras.object_utils import world_to_camera_view
 
+import greinerhormann
+
 bl_info = {
     "name": "Vector Render",
     "author": "Marco Rossini",
@@ -382,8 +384,31 @@ class bsp_node:
         p = self.node_polys[0]
         if self.front_polys:
             fp_list = self.front_polys.node_polys
+            # create current mp
+            current_mp = [(point.y, point.z) for point in p.qp]
+            print('cmp', current_mp)
+            # remove mp
             for fp in fp_list:
-                p.apply_difference(fp)
+                print('doing polys', fp)
+                cfp = [(point.y, point.z) for point in fp.qp]
+                print(cfp)
+                current_mp = greinerhormann.clip_polygon(current_mp, cfp)
+            
+
+            print('current_mp', current_mp)
+            
+            # replace mp
+            #if len(current_mp) > 0:
+            #    #newverts = [[1, *p] for p in current_mp[0][0].points]
+            #    #self.N = len(ps[0][0].points) - 1
+            #    
+            #    for mp in current_mp:
+            #        #print('mp', mp[0])
+            #        newverts = [Vector((1, *p)) for p in mp.points]
+            #        newpoly = polygon(newverts, p.nn, holdout = p.holdout)
+            #        self.node_polys.append(newpoly)
+            #else:
+            #    self.node_polys.pop(0)
         # repeat for rest of tree
         if self.back_polys:
             self.back_polys.cut_difference_with_front()
@@ -766,10 +791,23 @@ class polygon:
     def apply_difference(self, diffpoly):
         # TODO: see if more readable way
         if self.bbox.overlap(diffpoly.bbox):
-            print('theres a thing')
-            og_edges = self.extract_projected_edges()
-            print('e', og_edges)
-        
+            #print('theres a thing')
+            #print('pe', self.extract_projected_edges())
+            #og_edges = [pe for pe in self.extract_projected_edges()]
+            #print('e', og_edges)
+            #og_edges = [greinerhormann.Vertex(og) for og in og_edges]
+            mp = greinerhormann.Polygon()
+            for p in self.qp:
+                mp.add(greinerhormann.Vertex((p[1], p[2])))
+            
+            dp = greinerhormann.Polygon()
+            for p in diffpoly.qp:
+                dp.add(greinerhormann.Vertex((p[1], p[2])))
+            
+            ps = mp.difference(dp)
+            if len(ps) > 0:
+                self.qp = [[1, *p] for p in ps[0][0].points]
+                self.N = len(ps[0][0].points) - 1
         #if (self.bbox.xmax > diffpoly.bbox.xmin and self.bbox.ymax > diffpoly.bbox.ymin) or (diffpoly.bbox.xmax > self.bbox.xmin and diffpoly.bbox.ymax > self.bbox.ymin):
         #    print('there is a thing')
 
@@ -1227,16 +1265,6 @@ class VectorRender(bpy.types.Operator):
                         polytree.insert_poly(poly_obj)
                     else:
                         polytree = bsp_node(poly_obj)
-
-                split_p = polytree.get_polygons()
-                for sp in split_p:
-                    if sp not in split_polylist:
-                        split_polylist.append(sp)
-                split_e = polytree.get_edges()
-                for sp in split_e:
-                    e = edge(sp[0], sp[1])
-                    if e not in split_edgelist:
-                        split_edgelist.append(e)
                 
                 # Iterate over the edges of the polygon
                 for eg in poly.edge_keys:
@@ -1284,6 +1312,18 @@ class VectorRender(bpy.types.Operator):
             print("- Reading", object.name, "...")
             lb = label(object.data.body, object.location, degrees(object.rotation_euler.x), object.data.align_x, object.data.align_y)
             labellist.append(lb)
+
+        # if polytree
+        if polytree:
+            split_p = polytree.get_polygons()
+            for sp in split_p:
+                if sp not in split_polylist:
+                    split_polylist.append(sp)
+            split_e = polytree.get_edges()
+            for sp in split_e:
+                e = edge(sp[0], sp[1])
+                if e not in split_edgelist:
+                    split_edgelist.append(e) 
 
         # Test for geometry
         if not edgetree:
